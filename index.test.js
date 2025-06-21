@@ -117,7 +117,7 @@ describe('calculateEnergySavings', () => {
     expect(calculateEnergySavings(usageProfile)).toEqual(MAX_IN_PERIOD);
   });
 
-  it.only('should calculate energy savings correctly on sensible data', () => {
+  it('should calculate energy savings correctly on sensible data', () => {
     const usageProfile = {
       initial: 'off',
       events: [
@@ -171,6 +171,15 @@ describe('calculateEnergySavings', () => {
   });
 });
 
+
+//2880
+//4320
+
+// { state: 'off', timestamp: 1400-1400=0 },
+// { state: 'on', timestamp: 1700-1440=260 },
+// { state: 'off', timestamp: 1900-1460=460 },
+// { state: 'on', timestamp: 2599-1159 }
+
 // Part 3
 describe('calculateEnergyUsageForDay', () => {
   const monthProfile = {
@@ -216,28 +225,40 @@ describe('calculateEnergyUsageForDay', () => {
     expect(calculateEnergyUsageForDay(monthProfile, 3)).toEqual(
       2900 - 2880 + (3500 - 3000) + (4320 - 4000)
     );
+    // 20 - 0 + (620 - 120) + (1440 - 1120)
   });
 
   it('should calculate day 4 correctly', () => {
     expect(calculateEnergyUsageForDay(monthProfile, 4)).toEqual(
       4420 - 4320 + (5760 - 4500)
     );
+    100 - 0 + (1440 - 180)
   });
 
   it('should calculate day 5 correctly', () => {
     expect(calculateEnergyUsageForDay(monthProfile, 5)).toEqual(MAX_IN_PERIOD);
   });
 
-  it('should calculate day 2 correctly when the first event starts on day 4', () => {
+  describe('should calculate day 2 correctly when the first event starts on day 4', () => {
     const monthProfile1 = {
       initial: 'off',
       events: [{ timestamp: 4500, state: 'on' }],
     };
-    expect(calculateEnergyUsageForDay(monthProfile1, 2)).toEqual(0);
-    expect(calculateEnergyUsageForDay(monthProfile1, 4)).toEqual(1260);
-    expect(calculateEnergyUsageForDay(monthProfile1, 15)).toEqual(
-      MAX_IN_PERIOD
-    );
+
+    it('month 2 should be 0', () => {
+      expect(calculateEnergyUsageForDay(monthProfile1, 2)).toEqual(0);
+    })
+
+    it('month 4 should be 1260', () => {
+      expect(calculateEnergyUsageForDay(monthProfile1, 4)).toEqual(1260);
+    })
+
+    it('month 15 should be MAX', () => {
+      expect(calculateEnergyUsageForDay(monthProfile1, 15)).toEqual(
+        MAX_IN_PERIOD
+      );
+    })
+
   });
 
   it('should throw an error on an out of range day number', () => {

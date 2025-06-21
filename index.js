@@ -74,6 +74,7 @@ const calculateEnergyUsageSimple = (profile) => {
       // add to total duration
       if (localOnTimestamp !== -1) {
         totalDuration += (currentEvent.timestamp - localOnTimestamp)
+        console.log('calc: ', currentEvent.timestamp, '-', localOnTimestamp)
       }
       // reset localOnTimestamp
       localOnTimestamp = -1
@@ -84,6 +85,8 @@ const calculateEnergyUsageSimple = (profile) => {
 
   if (events[events.length - 1].state === STATE.ON) {
     totalDuration += (LAST_MINUTE - events[events.length - 1].timestamp)
+    console.log('calc: ', LAST_MINUTE, '-', events[events.length - 1].timestamp)
+
   }
   return totalDuration
 
@@ -138,6 +141,8 @@ const calculateEnergySavings = (profile) => {
 
   let previousAutoOffTimestamp = -1
   let totalTimeSaved = 0
+  let onTriggered = false
+  let lastValidEventIsAutoOff = false
 
   for (let i = 0; i < events.length; i++) {
     
@@ -145,6 +150,8 @@ const calculateEnergySavings = (profile) => {
     const currentState = currentEvent.state
 
     if (currentState === STATE.ON) {
+      onTriggered = true
+      lastValidEventIsAutoOff = false
       if (previousAutoOffTimestamp !== -1) {
         totalTimeSaved += currentEvent.timestamp - previousAutoOffTimestamp
         console.log('timesaved: ', currentEvent.timestamp, '-', previousAutoOffTimestamp)
@@ -152,19 +159,29 @@ const calculateEnergySavings = (profile) => {
 
     } else if (currentState === STATE.OFF) {
       // do nothing
+      if (onTriggered) {
+        previousAutoOffTimestamp = -1
+      }
     } else {
       // auto off
+      onTriggered = false
+      lastValidEventIsAutoOff = true
       if (previousAutoOffTimestamp === -1) {
         previousAutoOffTimestamp = currentEvent.timestamp
       }
     }
+  }
 
-    if (i === events.length - 1 && currentState === STATE.AUTO) {
-      totalTimeSaved += MAX_IN_PERIOD - currentEvent.timestamp
-      console.log('timesaved: ', MAX_IN_PERIOD, '-', currentEvent.timestamp)
+    // Need to ensure last proper is auto off
+    // if (i === events.length - 1 && currentState === STATE.AUTO) {
+    if (lastValidEventIsAutoOff) {
+      // totalTimeSaved += MAX_IN_PERIOD - currentEvent.timestamp
+      totalTimeSaved += MAX_IN_PERIOD - previousAutoOffTimestamp
+
+      console.log('timesaved: ', MAX_IN_PERIOD, '-', previousAutoOffTimestamp)
 
     }
-  }
+  
   return totalTimeSaved
 
 };
@@ -197,7 +214,87 @@ const calculateEnergySavings = (profile) => {
 
 const isInteger = (number) => Number.isInteger(number);
 
-const calculateEnergyUsageForDay = (monthUsageProfile, day) => {};
+const sortEventByTimeStamp = (events) => {
+  return events.sort((a,b) => a.timestamp - b.timestamp)
+}
+
+const calculateEpochStartEndPositions = (events, epochDayStart, epochDayEnd) => {
+  let startPosition = -1
+  let endPosition = -1
+
+  for (let i = 0; i < events.length; i++) {
+    if (epochDayStart <= events[i].timestamp && startPosition === -1) {
+      console.log('setting start to ', i, events[i].timestamp)
+      startPosition = i
+    }
+    if (epochDayEnd <= events[i].timestamp && endPosition === -1) {
+      endPosition = i
+    }
+  }
+
+  if (startPosition === -1) startPosition = 0
+  if (endPosition === -1) endPosition = events.length - 1
+
+  return { startPosition, endPosition}
+}
+
+const calculateEnergyUsageForDay = (monthUsageProfile, day) => {
+
+  if (!isInteger(day)) throw('must be an integer')
+  if (day < 1 || day > 365) throw ('day out of range')
+
+  if (monthUsageProfile.events.length === 0) {
+    if (monthUsageProfile.initial === STATE.OFF) {
+      return 0
+    }
+    if (monthUsageProfile.initial === STATE.ON) {
+      return MAX_IN_PERIOD
+    }
+  }
+
+  const epochDayStart = (day-1) * 1440
+  const epochDayEnd = day * 1440
+
+  if (
+    (epochDayStart < monthUsageProfile.events.at(0).timestamp) && 
+    (epochDayEnd < monthUsageProfile.events.at(0).timestamp) &&
+    monthUsageProfile.initial === STATE.OFF) return 0
+  if ((epochDayStart >= monthUsageProfile.events.at(-1).timestamp) && monthUsageProfile.events.at(-1).state === STATE.ON) return MAX_IN_PERIOD
+
+  console.log('epochDayStart ', epochDayStart)
+  console.log('epochDayEnd ', epochDayEnd)
+
+
+  const sortedEvents = sortEventByTimeStamp(monthUsageProfile.events)
+  const {startPosition, endPosition} = calculateEpochStartEndPositions(monthUsageProfile.events, epochDayStart, epochDayEnd)
+  console.log('startpos', startPosition)
+  console.log('endPos', endPosition)
+
+  const previousDayStatePosition = startPosition === 0 ? startPosition : startPosition - 1
+  console.log('final end position: ', endPosition)
+  // console.log('all evnets before slice: ', monthUsageProfile.events)
+  const inclusiveEnd = endPosition === monthUsageProfile.events.length - 1 ? endPosition + 1 : endPosition
+  const events = monthUsageProfile.events.slice(startPosition, inclusiveEnd)
+  console.log('before norm', events)
+  const normalisedEvents = events.map((event) => ({
+    ...event,
+    timestamp:  event.timestamp - (MAX_IN_PERIOD * (day - 1))
+  }))
+
+  console.log('normliased:', normalisedEvents)
+  const initial = day === 1 ? monthUsageProfile.initial : sortedEvents[previousDayStatePosition].state
+  // const initial = 'off'
+
+  const dayObject = {
+    initial,
+    events: normalisedEvents
+  }
+
+  console.log('dayObject', dayObject)
+  const energyUsage = calculateEnergyUsageSimple(dayObject)
+  return energyUsage
+
+};
 
 module.exports = {
   calculateEnergyUsageSimple,
