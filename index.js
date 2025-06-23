@@ -36,62 +36,308 @@ const MAX_IN_PERIOD = 1440;
  * ```
  */
 
-// for this we first detect if state is on
-// if on then we grab the next state and check for off
-// then off timestamp - on timestamp is local duration timestamp, add that to totalDuration
-
-// we check for initial state, if off then we do step 1, if on then we do calculate to off.
-
 const STATE = {
-  ON:'on',
-  OFF:'off',
-  AUTO:'auto-off'
-}
+  ON: 'on',
+  OFF: 'off',
+  AUTO: 'auto-off',
+};
 
-const LAST_MINUTE = 1440
+const FIRST_DAY = 1;
+const LAST_DAY = 365;
 
-const calculateEnergyUsageSimple = (profile) => {
-  
-  let totalDuration = 0
-  const events = profile.events
+/**
+ * Handles the case when there are no events in a profile
+ * @param {string} initialState The initial state
+ * @returns {number} The energy usage for the initial state
+ */
+const handleEmptyEvents = (initialState) => {
+  return getInitialStateResult(initialState);
+};
 
-  let localOnTimestamp = -1
+/**
+ * Calculates the epoch start and end timestamps for a given day
+ * @param {number} day The day number
+ * @returns {Object} Object containing epochDayStart and epochDayEnd
+ */
+const calculateEpochDayBoundaries = (day) => {
+  return {
+    epochDayStart: (day - 1) * MAX_IN_PERIOD,
+    epochDayEnd: day * MAX_IN_PERIOD,
+  };
+};
 
-  if (events.length === 0 && profile.initial === STATE.ON){
-    return LAST_MINUTE
+/**
+ * Validates that a day number is valid
+ * @param {number} day The day number to validate
+ * @throws {Error} When day is not an integer or out of range
+ */
+const validateDay = (day) => {
+  if (!isInteger(day)) {
+    throw new Error('must be an integer');
   }
-  // add first state
-  if (profile.initial === STATE.ON) {
-    localOnTimestamp = 0
+  if (day < FIRST_DAY || day > LAST_DAY) {
+    throw new Error('day out of range');
   }
-  
+};
+
+/**
+ * Validates that an initial state is valid
+ * @param {string} initialState The initial state to validate
+ * @throws {Error} When initial state is invalid
+ */
+const validateInitialState = (initialState) => {
+  if (!Object.values(STATE).includes(initialState)) {
+    throw new Error('invalid initial state');
+  }
+};
+
+/**
+ * Validates that a state is valid
+ * @param {string} state The state to validate
+ * @throws {Error} When state is invalid
+ */
+const validateState = (state) => {
+  if (!Object.values(STATE).includes(state)) {
+    throw new Error('invalid state');
+  }
+};
+
+/**
+ * Validates that a timestamp is within the valid range for a day
+ * @param {number} timestamp The timestamp to validate
+ * @param {number} maxPeriod The maximum period (defaults to MAX_IN_PERIOD)
+ * @throws {Error} When timestamp is out of range
+ */
+const validateTimestamp = (timestamp) => {
+  if (timestamp > MAX_IN_PERIOD || timestamp < 0) {
+    throw new Error('events out of range');
+  }
+};
+
+/**
+ * Validates a usage profile object
+ *
+ * @param {Object} profile The usage profile to validate
+ * @param {string} profile.initial The initial state of the appliance
+ * @param {Array<Object>} profile.events Array of state change events
+ * @throws {Error} When profile is invalid, missing required properties, or has invalid values
+ */
+const validateProfile = (profile) => {
+  if (!profile || typeof profile !== 'object') {
+    throw new Error('profile must be a valid object');
+  }
+
+  if (!profile.hasOwnProperty('initial')) {
+    throw new Error('profile must have an initial state');
+  }
+
+  validateInitialState(profile.initial);
+
+  if (!profile.hasOwnProperty('events')) {
+    throw new Error('profile must have an events array');
+  }
+
+  if (!Array.isArray(profile.events)) {
+    throw new Error('profile.events must be an array');
+  }
+};
+
+const isInteger = (number) => Number.isInteger(number);
+
+// Note: Can we guarantee that events are sorted? If so then we can skip this step.
+// This mutates the original array. For large datasets we might need to consider pre-sorting
+
+/**
+ * Sorts events by timestamp in ascending order
+ *
+ * @param {Array<Object>} events Array of event objects
+ * @returns {Array<Object>} The sorted array of events
+ */
+const sortEventByTimeStamp = (events) => {
+  return events.sort((a, b) => a.timestamp - b.timestamp);
+};
+
+// Note: For small data this is ok but we can improve for bigger data sets by using
+// a binary search to get the start and end date positions instead of looping the entire array
+// O(n) -> O(logn)
+
+/**
+ * Finds the start and end positions in a sorted events array for a given time range
+ *
+ * @param {Array<Object>} events Sorted array of event objects
+ * @param {number} epochDayStart Start timestamp
+ * @param {number} epochDayEnd End timestamp
+ * @returns {Object} Object containing startPosition and endPosition indices
+ */
+const calculateEpochStartEndPositions = (
+  events,
+  epochDayStart,
+  epochDayEnd
+) => {
+  let startPosition = -1;
+  let endPosition = -1;
+
   for (let i = 0; i < events.length; i++) {
-    
-    const currentEvent = events[i]
-    const currentState = currentEvent.state
-
-    if (currentState === STATE.OFF) {
-      // add to total duration
-      if (localOnTimestamp !== -1) {
-        totalDuration += (currentEvent.timestamp - localOnTimestamp)
-        console.log('calc: ', currentEvent.timestamp, '-', localOnTimestamp)
-      }
-      // reset localOnTimestamp
-      localOnTimestamp = -1
-    } else if (currentState === STATE.ON && localOnTimestamp === -1) {
-      localOnTimestamp = currentEvent.timestamp
+    const timestamp = events[i].timestamp;
+    // Find the first event that occurs at or after the start of the day
+    if (epochDayStart <= timestamp && startPosition === -1) {
+      startPosition = i;
+    }
+    // Find the first event that occurs at or after the end of the day
+    if (epochDayEnd <= timestamp && endPosition === -1) {
+      endPosition = i;
     }
   }
 
-  if (events[events.length - 1].state === STATE.ON) {
-    totalDuration += (LAST_MINUTE - events[events.length - 1].timestamp)
-    console.log('calc: ', LAST_MINUTE, '-', events[events.length - 1].timestamp)
-
+  // Handle edge cases where no events fall within the range
+  if (startPosition === -1) {
+    startPosition = 0;
   }
-  return totalDuration
+  if (endPosition === -1) {
+    endPosition = events.length - 1;
+  }
 
-  //add last state
-}
+  return { startPosition, endPosition };
+};
+
+/**
+ * Determines the initial state for a specific day based on the month's usage profile
+ *
+ * Uses the state from the last event of the previous day, or the month's initial state if no
+ * previous events exist.
+ *
+ * @param {Object} monthProfile The month's usage profile
+ * @param {number} day The day number
+ * @param {number} startPosition The starting position of events for this day
+ * @param {Array<Object>} sortedEvents The sorted events array
+ * @returns {string} The initial state for the specified day
+ */
+const getDayInitialState = (monthProfile, day, startPosition, sortedEvents) => {
+  if (day === 1) return monthProfile.initial;
+
+  // If there are no events or the first event is for this day, use the month's initial state.
+  if (sortedEvents.length === 0 || startPosition === 0) {
+    return monthProfile.initial;
+  }
+
+  // Otherwise, use the state from the last event before this day.
+  return sortedEvents[startPosition - 1].state;
+};
+
+// Note: I avoided using slice and map ie events.slice(start, end+1) as it's inefficient for large arrays.
+
+/**
+ * Normalizes events for a specific day by adjusting timestamps to relative values
+ *
+ * @param {Array<Object>} events Array of event objects
+ * @param {number} startPosition Starting index in the events array
+ * @param {number} endPosition Ending index in the events array (inclusive)
+ * @param {number} day The day number for timestamp normalization
+ * @returns {Array<Object>} Array of normalized events
+ * @throws {Error} When startPosition or endPosition are out of bounds
+ */
+const normaliseEventsForDay = (events, startPosition, endPosition, day) => {
+  const normalisedEvents = [];
+  const dayOffset = MAX_IN_PERIOD * (day - 1);
+  const dayEndTimestamp = day * MAX_IN_PERIOD;
+
+  // Handle empty events or invalid positions
+  if (!Array.isArray(events) || events.length === 0) {
+    return [];
+  }
+  if (startPosition > endPosition) {
+    return [];
+  }
+  if (startPosition < 0 || endPosition >= events.length) {
+    throw new Error('startPosition or endPosition out of bounds');
+  }
+
+  for (let i = startPosition; i <= endPosition; i++) {
+    const event = events[i];
+    // Skip any events that are on the end day boundary as they belong to the next day
+    // This is required as our endPositions are inclusive
+    if (event.timestamp >= dayEndTimestamp) {
+      continue;
+    }
+    normalisedEvents.push({
+      state: event.state,
+      timestamp: event.timestamp - dayOffset,
+    });
+  }
+  return normalisedEvents;
+};
+
+/**
+ * Calculates the energy usage for a given initial state
+ * @param {string} initialState The initial state of the appliance ('on', 'off', or 'auto-off')
+ * @returns {number} The energy usage in minutes (0 for off states, MAX_IN_PERIOD for on states)
+ * @throws {Error} When initialState is not a valid state
+ */
+const getInitialStateResult = (initialState) => {
+  switch (initialState) {
+    case STATE.OFF:
+      return 0;
+    case STATE.ON:
+      return MAX_IN_PERIOD;
+    case STATE.AUTO:
+      return MAX_IN_PERIOD;
+    default:
+      throw new Error('invalid initial state');
+  }
+};
+
+/**
+ * Calculates the total energy usage of an appliance over a single day
+ *
+ * @param {Object} profile The usage profile containing initial state and events
+ * @returns {number} Total energy usage in minutes
+ * @throws {Error} When initial state is invalid or timestamps are out of range
+ */
+const calculateEnergyUsageSimple = (profile) => {
+  validateProfile(profile);
+
+  let totalDuration = 0;
+  let applianceOnStartTime = -1;
+
+  const events = profile.events;
+
+  // If there are no events, usage is determined by the initial state.
+  if (events.length === 0) {
+    return handleEmptyEvents(profile.initial);
+  }
+
+  // If the appliance is initially on, start tracking usage from the beginning of the day.
+  if (profile.initial === STATE.ON) {
+    applianceOnStartTime = 0;
+  }
+
+  for (let i = 0; i < events.length; i++) {
+    const currentEvent = events[i];
+    const currentState = currentEvent.state;
+
+    validateTimestamp(currentEvent.timestamp);
+
+    if (currentState === STATE.OFF) {
+      // If the appliance was previously 'on', add the duration it was on up to this event.
+      if (applianceOnStartTime !== -1) {
+        totalDuration += currentEvent.timestamp - applianceOnStartTime;
+      }
+      // Reset on start time
+      applianceOnStartTime = -1;
+    } else if (currentState === STATE.ON && applianceOnStartTime === -1) {
+      // Start tracking 'on' time
+      applianceOnStartTime = currentEvent.timestamp;
+    }
+    // Ignore duplicate 'on' events if the appliance is already on.
+  }
+
+  // If the last event leaves the appliance on, add usage until the end of the day.
+  if (applianceOnStartTime !== -1) {
+    totalDuration += MAX_IN_PERIOD - applianceOnStartTime;
+  }
+
+  return totalDuration;
+};
 
 /**
  * PART 2
@@ -125,65 +371,67 @@ const calculateEnergyUsageSimple = (profile) => {
  * and not manual intervention.
  */
 
+/**
+ * Calculates the energy savings achieved by auto-off
+ *
+ * @param {Object} profile The usage profile
+ * @returns {number} Total energy savings in minutes
+ * @throws {Error} When any event state is invalid
+ */
 const calculateEnergySavings = (profile) => {
+  validateProfile(profile);
 
-  const events = profile.events
+  const events = profile.events;
 
-
+  // If there are no events, savings depend only on the initial state
   if (events.length === 0) {
-    if ((profile.initial === STATE.ON) || (profile.initial === STATE.OFF)) {
-      return 0
+    if (profile.initial === STATE.ON || profile.initial === STATE.OFF) {
+      return 0;
     }
     if (profile.initial === STATE.AUTO) {
-      return MAX_IN_PERIOD
+      return MAX_IN_PERIOD;
     }
   }
 
-  let previousAutoOffTimestamp = -1
-  let totalTimeSaved = 0
-  let onTriggered = false
-  let lastValidEventIsAutoOff = false
+  let previousAutoOffTimestamp = -1;
+  let totalTimeSaved = 0;
+  let isCurrentlyOn = false;
+  let lastValidEventIsAutoOff = false;
 
   for (let i = 0; i < events.length; i++) {
-    
-    const currentEvent = events[i]
-    const currentState = currentEvent.state
+    const currentEvent = events[i];
+    const currentState = currentEvent.state;
+
+    validateState(currentState);
 
     if (currentState === STATE.ON) {
-      onTriggered = true
-      lastValidEventIsAutoOff = false
+      isCurrentlyOn = true;
+      lastValidEventIsAutoOff = false;
+      // If the previous state was auto-off, add savings from auto-off to this 'on'
       if (previousAutoOffTimestamp !== -1) {
-        totalTimeSaved += currentEvent.timestamp - previousAutoOffTimestamp
-        console.log('timesaved: ', currentEvent.timestamp, '-', previousAutoOffTimestamp)
+        totalTimeSaved += currentEvent.timestamp - previousAutoOffTimestamp;
       }
-
     } else if (currentState === STATE.OFF) {
-      // do nothing
-      if (onTriggered) {
-        previousAutoOffTimestamp = -1
+      // Manual turn off, reset auto-off tracking if appliance was on
+      if (isCurrentlyOn) {
+        previousAutoOffTimestamp = -1;
       }
-    } else {
-      // auto off
-      onTriggered = false
-      lastValidEventIsAutoOff = true
+    } else if (currentState === STATE.AUTO) {
+      // Start tracking a new auto-off savings
+      isCurrentlyOn = false;
+      lastValidEventIsAutoOff = true;
       if (previousAutoOffTimestamp === -1) {
-        previousAutoOffTimestamp = currentEvent.timestamp
+        previousAutoOffTimestamp = currentEvent.timestamp;
       }
     }
   }
 
-    // Need to ensure last proper is auto off
-    // if (i === events.length - 1 && currentState === STATE.AUTO) {
-    if (lastValidEventIsAutoOff) {
-      // totalTimeSaved += MAX_IN_PERIOD - currentEvent.timestamp
-      totalTimeSaved += MAX_IN_PERIOD - previousAutoOffTimestamp
+  // If the last event was an auto-off, add savings until the end of the day
+  if (lastValidEventIsAutoOff) {
+    totalTimeSaved += MAX_IN_PERIOD - previousAutoOffTimestamp;
+  }
 
-      console.log('timesaved: ', MAX_IN_PERIOD, '-', previousAutoOffTimestamp)
-
-    }
-  
-  return totalTimeSaved
-
+  return totalTimeSaved;
 };
 
 /**
@@ -212,93 +460,83 @@ const calculateEnergySavings = (profile) => {
  * been given for the month.
  */
 
-const isInteger = (number) => Number.isInteger(number);
-
-const sortEventByTimeStamp = (events) => {
-  return events.sort((a,b) => a.timestamp - b.timestamp)
-}
-
-const calculateEpochStartEndPositions = (events, epochDayStart, epochDayEnd) => {
-  let startPosition = -1
-  let endPosition = -1
-
-  for (let i = 0; i < events.length; i++) {
-    if (epochDayStart <= events[i].timestamp && startPosition === -1) {
-      console.log('setting start to ', i, events[i].timestamp)
-      startPosition = i
-    }
-    if (epochDayEnd <= events[i].timestamp && endPosition === -1) {
-      endPosition = i
-    }
-  }
-
-  if (startPosition === -1) startPosition = 0
-  if (endPosition === -1) endPosition = events.length - 1
-
-  return { startPosition, endPosition}
-}
-
+/**
+ * Calculates the energy usage for a specific day from a month usage profile
+ *
+ * @param {Object} monthUsageProfile
+ * @param {Array<Object>} monthUsageProfile.events
+ * @param {number} day
+ * @returns {number} The energy usage in minutes
+ * @throws {Error} When day is not an integer or out of range
+ */
 const calculateEnergyUsageForDay = (monthUsageProfile, day) => {
+  validateDay(day);
+  validateProfile(monthUsageProfile);
 
-  if (!isInteger(day)) throw('must be an integer')
-  if (day < 1 || day > 365) throw ('day out of range')
-
+  // If there are no events, usage is determined by the initial state for the month.
   if (monthUsageProfile.events.length === 0) {
-    if (monthUsageProfile.initial === STATE.OFF) {
-      return 0
-    }
-    if (monthUsageProfile.initial === STATE.ON) {
-      return MAX_IN_PERIOD
-    }
+    return handleEmptyEvents(monthUsageProfile.initial);
   }
 
-  const epochDayStart = (day-1) * 1440
-  const epochDayEnd = day * 1440
+  const epochDayStart = (day - 1) * MAX_IN_PERIOD;
+  const epochDayEnd = day * MAX_IN_PERIOD;
 
-  if (
-    (epochDayStart < monthUsageProfile.events.at(0).timestamp) && 
-    (epochDayEnd < monthUsageProfile.events.at(0).timestamp) &&
-    monthUsageProfile.initial === STATE.OFF) return 0
-  if ((epochDayStart >= monthUsageProfile.events.at(-1).timestamp) && monthUsageProfile.events.at(-1).state === STATE.ON) return MAX_IN_PERIOD
-
-  console.log('epochDayStart ', epochDayStart)
-  console.log('epochDayEnd ', epochDayEnd)
-
-
-  const sortedEvents = sortEventByTimeStamp(monthUsageProfile.events)
-  const {startPosition, endPosition} = calculateEpochStartEndPositions(monthUsageProfile.events, epochDayStart, epochDayEnd)
-  console.log('startpos', startPosition)
-  console.log('endPos', endPosition)
-
-  const previousDayStatePosition = startPosition === 0 ? startPosition : startPosition - 1
-  console.log('final end position: ', endPosition)
-  // console.log('all evnets before slice: ', monthUsageProfile.events)
-  const inclusiveEnd = endPosition === monthUsageProfile.events.length - 1 ? endPosition + 1 : endPosition
-  const events = monthUsageProfile.events.slice(startPosition, inclusiveEnd)
-  console.log('before norm', events)
-  const normalisedEvents = events.map((event) => ({
-    ...event,
-    timestamp:  event.timestamp - (MAX_IN_PERIOD * (day - 1))
-  }))
-
-  console.log('normliased:', normalisedEvents)
-  const initial = day === 1 ? monthUsageProfile.initial : sortedEvents[previousDayStatePosition].state
-  // const initial = 'off'
-
-  const dayObject = {
-    initial,
-    events: normalisedEvents
+  // If the day is before the first event, usage is determined by the initial state.
+  if (epochDayEnd <= monthUsageProfile.events[0].timestamp) {
+    return getInitialStateResult(monthUsageProfile.initial);
   }
 
-  console.log('dayObject', dayObject)
-  const energyUsage = calculateEnergyUsageSimple(dayObject)
-  return energyUsage
+  // If the day is after the last event and the last event is 'on', usage is max for the day.
+  const lastEvent = monthUsageProfile.events.at(-1);
+  if (epochDayStart >= lastEvent.timestamp && lastEvent.state === STATE.ON) {
+    return MAX_IN_PERIOD;
+  }
 
+  // We sort every time calculateEnergyUsageForDay is called. A better implementation would be to ensure events are sorted before calling
+  const sortedEvents = sortEventByTimeStamp(monthUsageProfile.events);
+  const { startPosition, endPosition } = calculateEpochStartEndPositions(
+    sortedEvents,
+    epochDayStart,
+    epochDayEnd
+  );
+
+  const normalisedEvents = normaliseEventsForDay(
+    sortedEvents,
+    startPosition,
+    endPosition,
+    day
+  );
+  const initialState = getDayInitialState(
+    monthUsageProfile,
+    day,
+    startPosition,
+    sortedEvents
+  );
+
+  const dayProfile = {
+    initial: initialState,
+    events: normalisedEvents,
+  };
+
+  return calculateEnergyUsageSimple(dayProfile);
 };
 
 module.exports = {
   calculateEnergyUsageSimple,
   calculateEnergySavings,
   calculateEnergyUsageForDay,
+  calculateEpochStartEndPositions,
+  getDayInitialState,
+  normaliseEventsForDay,
+  validateProfile,
+  getInitialStateResult,
+  sortEventByTimeStamp,
+  validateDay,
+  validateState,
+  validateInitialState,
+  validateTimestamp,
+  calculateEpochDayBoundaries,
+  handleEmptyEvents,
   MAX_IN_PERIOD,
+  STATE,
 };
